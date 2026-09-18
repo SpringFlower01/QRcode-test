@@ -1,0 +1,75 @@
+name: Generate QR Code
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'QRコード化するURL'
+        required: true
+        type: string
+      output_name:
+        description: '出力ファイル名（拡張子不要 / 例: figma-qr）'
+        required: false
+        default: 'qrcode'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-qr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Python環境のセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: QRコード生成ライブラリのインストール
+        run: |
+          pip install "qrcode[pil]"
+
+      - name: QRコードを生成 (PNG & SVG)
+        run: |
+          python -c "
+          import qrcode
+          from qrcode.image.svg import SvgPathImage
+
+          url = '${{ inputs.target_url }}'
+          name = '${{ inputs.output_name }}'
+
+          # 1. ラスターPNG生成
+          qr_png = qrcode.QRCode(
+              version=None,
+              error_correction=qrcode.constants.ERROR_CORRECT_M,
+              box_size=10,
+              border=2
+          )
+          qr_png.add_data(url)
+          qr_png.make(fit=True)
+          img_png = qr_png.make_image(fill_color='black', back_color='white')
+          img_png.save(f'{name}.png')
+
+          # 2. ベクターSVG生成
+          qr_svg = qrcode.QRCode(
+              version=None,
+              error_correction=qrcode.constants.ERROR_CORRECT_M,
+              border=2,
+              image_factory=SvgPathImage
+          )
+          qr_svg.add_data(url)
+          qr_svg.make(fit=True)
+          img_svg = qr_svg.make_image()
+          img_svg.save(f'{name}.svg')
+          "
+
+      - name: リポジトリへ自動コミット＆プッシュ
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${{ inputs.output_name }}.png" "${{ inputs.output_name }}.svg"
+          git commit -m "Generate QR code for ${{ inputs.target_url }}" || echo "変更なし"
+          git push
