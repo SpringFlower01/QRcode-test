@@ -1,4 +1,4 @@
-name: Generate QR Code
+name: Generate QR Code with Logo
 
 on:
   workflow_dispatch:
@@ -11,6 +11,10 @@ on:
         description: '出力ファイル名（拡張子不要 / 例: figma-qr）'
         required: false
         default: 'qrcode'
+        type: string
+      logo_url:
+        description: '【任意】真ん中に置くロゴ画像のURL（インターネット上の画像の直リンクURL）'
+        required: false
         type: string
 
 permissions:
@@ -28,36 +32,73 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: QRコード生成ライブラリのインストール
+      - name: 必要なライブラリのインストール
         run: |
-          pip install "qrcode[pil]"
+          pip install "qrcode[pil]" requests
 
-      - name: QRコードを生成 (PNG & SVG)
+      - name: QRコードを生成 (PNGにロゴを合成)
         run: |
           python -c "
           import qrcode
+          import requests
+          from PIL import Image
+          from io import BytesIO
           from qrcode.image.svg import SvgPathImage
 
           url = '${{ inputs.target_url }}'
           name = '${{ inputs.output_name }}'
+          logo_url = '${{ inputs.logo_url }}'
 
-          # 1. ラスターPNG生成
+          # 1. 誤り訂正レベルを最高「H（30%補正）」に設定（中央にロゴを置くため）
           qr_png = qrcode.QRCode(
               version=None,
-              error_correction=qrcode.constants.ERROR_CORRECT_M,
+              error_correction=qrcode.constants.ERROR_CORRECT_H,
               box_size=10,
-              border=2
+              border=4
           )
           qr_png.add_data(url)
           qr_png.make(fit=True)
-          img_png = qr_png.make_image(fill_color='black', back_color='white')
+          
+          # 基本のQRコードをRGB形式で生成
+          img_png = qr_png.make_image(fill_color='black', back_color='white').convert('RGB')
+
+          # ロゴURLが入力されている場合のみ、真ん中に合成する
+          if logo_url:
+              try:
+                  print(f'Downloading logo from: {logo_url}')
+                  response = requests.get(logo_url)
+                  response.raise_for_status()
+                  
+                  # 画像を読み込み、サイズを調整
+                  logo = Image.open(BytesIO(response.content))
+                  
+                  # QRコードのサイズに合わせてロゴを縮小（約20%の大きさに）
+                  qr_width, qr_height = img_png.size
+                  logo_max_size = int(qr_width * 0.20)
+                  logo.thumbnail((logo_max_size, logo_max_size))
+                  
+                  # 挿入位置（真ん中）を計算
+                  logo_w, logo_h = logo.size
+                  pos_x = (qr_width - logo_w) // 2
+                  pos_y = (qr_height - logo_h) // 2
+                  
+                  # ロゴに透明度があれば考慮して重ねる
+                  if logo.mode in ('RGBA', 'LA'):
+                      img_png.paste(logo, (pos_x, pos_y), logo)
+                  else:
+                      img_png.paste(logo, (pos_x, pos_y))
+                  print('Logo embedded successfully!')
+              except Exception as e:
+                  print(f'Failed to add logo: {e}')
+                  print('Creating standard QR code instead.')
+
           img_png.save(f'{name}.png')
 
-          # 2. ベクターSVG生成
+          # 2. ベクターSVGも保存（※SVGは仕様上ロゴなしで出力します）
           qr_svg = qrcode.QRCode(
               version=None,
-              error_correction=qrcode.constants.ERROR_CORRECT_M,
-              border=2,
+              error_correction=qrcode.constants.ERROR_CORRECT_H,
+              border=4,
               image_factory=SvgPathImage
           )
           qr_svg.add_data(url)
@@ -71,5 +112,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add "${{ inputs.output_name }}.png" "${{ inputs.output_name }}.svg"
-          git commit -m "Generate QR code for ${{ inputs.target_url }}" || echo "変更なし"
+          git commit -m "Generate QR code with logo" || echo "変更なし"
           git push
